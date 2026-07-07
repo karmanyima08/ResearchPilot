@@ -1,13 +1,9 @@
-from dataclasses import dataclass, field
-from typing import List, Dict, Any
-
+from dataclasses import dataclass
 
 @dataclass
 class ParsedDocument:
     """
-    Represents a parsed research paper before it is stored.
+    Standard representation of a parsed document.
     """
 
     markdown: str
-    metadata: Dict[str, Any]
-    structure: Dict[str, Any] = field(default_factory=dict)
