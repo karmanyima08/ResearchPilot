@@ -19,10 +19,12 @@ class DocumentIngestionService:
 
         parsed_document = self.parser.parse(result["pdf_path"])
 
-        print("\n" + "=" * 80)
-        print("DOCILING MARKDOWN OUTPUT")
-        print("=" * 80)
-        print(parsed_document.markdown[:1000])
-        print("=" * 80)
+        markdown_path = self.storage.save_markdown(
+            result["paper_folder"],
+            parsed_document.markdown
+        )
 
-        return result
+        return {
+            **result,
+            "markdown_path": markdown_path
+        }
