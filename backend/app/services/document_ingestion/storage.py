@@ -29,6 +29,16 @@ class StorageService:
         }
 
     def save_markdown(self, paper_folder: Path, markdown: str):
+        markdown_path = paper_folder / "parsed.md"
+
+        print("Writing markdown length:", len(markdown))
+
+        with markdown_path.open("w", encoding="utf-8") as file:
+            file.write(markdown)
+
+        print("Saved file size:", markdown_path.stat().st_size)
+
+        return markdown_path
         """
         Save the parsed markdown representation of the paper.
         """

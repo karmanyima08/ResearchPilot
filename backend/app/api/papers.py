@@ -7,16 +7,17 @@ router = APIRouter(
     tags=["Papers"]
 )
 
-service = DocumentIngestionService()
+from app.services.indexing.service import IndexingService
+
+service = IndexingService()
 
 
 @router.post("/upload")
 async def upload_paper(file: UploadFile = File(...)):
 
-    result = service.ingest(file)
+    result = service.index(file)
 
     return {
         "success": True,
-        "paper_id": result["paper_id"],
-        "filename": file.filename
+        **result
     }
