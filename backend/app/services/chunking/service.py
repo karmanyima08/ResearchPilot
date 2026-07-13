@@ -9,4 +9,5 @@ class ChunkingService:
 
     def chunk_markdown(self, markdown: str):
 
-        return self.chunker.chunk(markdown)
+        return (self.
+                chunker.chunk(markdown))

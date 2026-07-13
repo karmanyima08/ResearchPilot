@@ -14,8 +14,9 @@ class VectorStoreService:
         metadatas = []
 
         for chunk in chunks:
+            paper_id = chunk.metadata["paper_id"]
 
-            ids.append(str(chunk.chunk_id))
+            ids.append(f"{paper_id}_{chunk.chunk_id}")
 
             documents.append(chunk.content)
 

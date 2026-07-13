@@ -41,6 +41,11 @@ class IndexingService:
             parsed_document.markdown
         )
 
+        # Enrich metadata with paper information
+        for chunk in chunks:
+            chunk.metadata["paper_id"] = storage_result["paper_id"]
+            chunk.metadata["paper_name"] = file.filename
+
         embeddings = self.embedder.embed_chunks(chunks)
 
         self.vector_store.store(

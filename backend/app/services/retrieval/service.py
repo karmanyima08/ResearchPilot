@@ -9,16 +9,35 @@ class RetrievalService:
         self.embedding = EmbeddingService()
         self.vector_store = VectorStoreService()
 
-    def search(self, query: str, top_k: int = 5):
+    def search(
+            self,
+            query: str,
+            paper_id: str | None = None,
+            top_k: int = 5
+    ):
 
         query_embedding = self.embedding.model.encode([query])[0]
 
+        query_kwargs = {
+            "query_embeddings": [query_embedding.tolist()],
+            "n_results": top_k
+        }
+
+        if paper_id:
+            query_kwargs["where"] = {
+                "paper_id": paper_id
+            }
+
         results = self.vector_store.db.collection.query(
-            query_embeddings=[query_embedding.tolist()],
-            n_results=top_k
+            **query_kwargs
         )
 
+        print("QUERY KWARGS:")
+        print(query_kwargs)
         retrieved = []
+
+        print("\nRESULTS:")
+        print(results)
 
         for i in range(len(results["documents"][0])):
 
