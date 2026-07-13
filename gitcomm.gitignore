@@ -1,5 +1,6 @@
 # Python
 backend/.venv/
+.venv/
 __pycache__/
 *.pyc
 
@@ -19,6 +20,7 @@ Thumbs.db
 
 # Storage
 backend/storage/papers/
+storage/chroma/
 
 # Node (future frontend)
 frontend/node_modules/
