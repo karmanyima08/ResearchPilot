@@ -1,37 +1,81 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
-
-from app.services.retrieval.service import RetrievalService
-from app.services.llm.service import LLMService
+from app.services.chat.service import ChatService
 
 router = APIRouter(
     prefix="/chat",
     tags=["Chat"]
 )
 
-retriever = RetrievalService()
-llm = LLMService()
+chat_service = ChatService()
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
 
 
 class ChatRequest(BaseModel):
     question: str
-    paper_id: str | None = None
+    paper_ids: list[str] = []
+    history: list[ChatMessage] = []
 
+
+class LiteratureReviewRequest(BaseModel):
+    paper_ids: list[str]
+
+class CompareRequest(BaseModel):
+    paper_ids: list[str]
+
+class ResearchGapRequest(BaseModel):
+    paper_ids: list[str]
 
 @router.post("/")
 async def chat(request: ChatRequest):
-    results = retriever.search(
+    answer, results, suggestions = chat_service.ask(
         request.question,
-        paper_id=request.paper_id
-    )
-
-    answer = llm.answer(
-        request.question,
-        results
+        request.paper_ids,
+        request.history,
     )
 
     return {
         "question": request.question,
         "answer": answer,
+        "sources": [r.metadata for r in results],
+        "suggestions": suggestions
+    }
+
+
+@router.post("/literature-review")
+async def literature_review(request: LiteratureReviewRequest):
+
+    answer, results = chat_service.generate_literature_review(
+        request.paper_ids
+    )
+
+    return {
+        "answer": answer,
         "sources": [r.metadata for r in results]
     }
+
+@router.post("/compare")
+async def compare(request: CompareRequest):
+
+    answer, results = chat_service.compare_papers(
+        request.paper_ids
+    )
+
+    return {
+        "answer": answer,
+        "sources": [r.metadata for r in results]
+    }
+@router.post("/research-gaps")
+async def research_gaps(request: ResearchGapRequest):
+        answer, results = chat_service.research_gaps(
+            request.paper_ids
+        )
+
+        return {
+            "answer": answer,
+            "sources": [r.metadata for r in results]
+        }

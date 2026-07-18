@@ -25,3 +25,4 @@ storage/chroma/
 # Node (future frontend)
 frontend/node_modules/
 frontend/.next/
+out

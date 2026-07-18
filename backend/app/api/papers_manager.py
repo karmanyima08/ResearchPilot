@@ -14,3 +14,7 @@ paper_service = PaperService()
 async def list_papers():
 
     return paper_service.list_papers()
+
+@router.delete("/{paper_id}")
+async def delete_paper(paper_id: str):
+    return paper_service.delete_paper(paper_id)

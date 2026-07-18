@@ -23,12 +23,15 @@ class StorageService:
         with pdf_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
+        from datetime import datetime
+
         # Save paper metadata
         metadata = {
             "paper_id": paper_id,
-            "paper_name": file.filename
-        }
+            "paper_name": file.filename,
+            "uploaded_at": datetime.now().isoformat(),
 
+        }
         with (paper_folder / "metadata.json").open(
             "w",
             encoding="utf-8"
