@@ -191,7 +191,7 @@ Export AI-generated responses directly into Microsoft Word documents.
 ### Clone Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/ResearchPilot.git
+git clone https://github.com/karmanyima08/ResearchPilot.git
 
 cd ResearchPilot
 ```
