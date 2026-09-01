@@ -13,6 +13,7 @@ class DocumentIngestionService:
         self.chunking = ChunkingService()
 
     def ingest(self, file: UploadFile):
+        print("########## INGEST STARTED ##########")
 
         Validator.validate_pdf(file)
 
@@ -44,7 +45,17 @@ class DocumentIngestionService:
             parsed_document.markdown
         )
 
+
+
+        parsed_path = self.storage.save_parsed_document(
+            result["paper_folder"],
+            parsed_document
+        )
+
+        print("Returned:", parsed_path)
+
         return {
             **result,
-            "markdown_path": markdown_path
+            "markdown_path": markdown_path,
+            "parsed_path": parsed_path
         }

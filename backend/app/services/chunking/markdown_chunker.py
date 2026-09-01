@@ -14,6 +14,8 @@ class MarkdownChunker(Chunker):
 
         sections = self._extract_sections(markdown)
 
+
+
         chunks = []
 
         chunk_id = 1

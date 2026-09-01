@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass
 class ParsedDocument:
@@ -7,3 +7,7 @@ class ParsedDocument:
     """
 
     markdown: str
+
+    sections: dict[str, str] = field(default_factory=dict)
+
+    metadata: dict = field(default_factory=dict)

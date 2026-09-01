@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+pydantic
+docling
+sentence-transformers
+numpy
+torch
+groq
+chromadb
+python-docx
+python-dotenv

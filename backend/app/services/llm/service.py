@@ -1,51 +1,111 @@
 from .client import GroqClient
 from .prompts import SYSTEM_PROMPT
+
+# NOTE: llama-3.1-8b-instant and llama-3.3-70b-versatile are deprecated on
+# Groq (shutdown Aug 16, 2026) - use their recommended replacements instead.
+# gpt-oss-20b is small/fast but too shallow for real synthesis - it produces
+# generic, repetitive, template-y writing on anything that requires actually
+# reasoning across multiple chunks/papers (answers, comparisons, lit reviews,
+# gap analysis). Use the larger model for those. Keep the small/fast model
+# only for trivial, low-stakes calls like generating follow-up questions,
+# where speed matters more than depth.
+QUALITY_MODEL = "openai/gpt-oss-120b"
+FAST_MODEL = "openai/gpt-oss-20b"
+
+
 class LLMService:
 
     def __init__(self):
         self.client = GroqClient().client
 
-    def answer(self,question, search_results, history=[]):
-        context = "\n\n".join(
-            result.content[:800]
-            for result in search_results
+    def rewrite_query(self, question, history):
+        """
+        Resolve pronouns/references ("it", "this method", "they"...) against
+        recent conversation history so retrieval actually searches for the
+        right thing, not just the literal current question. Previously this
+        was a no-op, which meant the system prompt's instruction to resolve
+        such references was decorative - retrieval never saw the resolved
+        query.
+        """
+        if not history:
+            return question
+
+        history_text = ""
+        for msg in history[-6:]:
+            role = msg.role.capitalize() if hasattr(msg, "role") else msg["role"].capitalize()
+            content = msg.content if hasattr(msg, "content") else msg["content"]
+            history_text += f"{role}: {content}\n"
+
+        prompt = f"""Given this conversation history:
+
+{history_text}
+
+Rewrite the following follow-up question into a fully self-contained
+search query by resolving any pronouns or references (it, they, this,
+that, these, those, the method, the model, etc.) using the history.
+
+If the question is already self-contained, return it unchanged.
+
+Follow-up question: {question}
+
+Return ONLY the rewritten query, nothing else."""
+
+        completion = self.client.chat.completions.create(
+            model=FAST_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
         )
 
-        prompt = f"""
-        Context
+        rewritten = completion.choices[0].message.content.strip()
+        return rewritten or question
 
-        {context}
+    def answer(self, question, search_results, history=[]):
+        from collections import defaultdict
+        paper_chunks = defaultdict(list)
+        for result in search_results:
 
-        ------------------------
+            if isinstance(result, dict):
+                metadata = result["metadata"]
+                content = result["content"]
+            else:
+                metadata = result.metadata
+                content = result.content
 
-        Question
+            paper_name = metadata.get("paper_name", "Unknown Paper")
 
-        {question}
+            # 1200 chars per chunk was starving the model of context on
+            # synthesis-heavy questions. Chunks are ~1000 chars at ingestion
+            # time anyway, so this limit should rarely need to truncate.
+            paper_chunks[paper_name].append(content[:2500])
 
-        ------------------------
+        context = ""
+        for paper_name, chunks in paper_chunks.items():
+            context += f"\n\n========== {paper_name} ==========\n\n"
+            for chunk in chunks:
+                context += chunk + "\n\n"
 
-        Instructions
+        if not context.strip():
+            context = "(No relevant passages were retrieved.)"
 
-        Answer in this format:
+        prompt = f"""Retrieved context:
+{context}
 
-        ## Answer
+Question: {question}
 
-        Provide a clear explanation.
+Answer the question directly using only the context above. Choose
+whatever structure best fits this specific question - plain prose for a
+simple factual question, a short explanation with a couple of relevant
+subpoints for a conceptual question, a table for a comparison, etc. Don't
+default to a fixed template.
 
-        ## Key Points
+Attribute facts naturally to the paper they came from as you write,
+rather than tagging every sentence with a mechanical "(Source: ...)".
 
-        - Bullet point 1
-        - Bullet point 2
-        - Bullet point 3
+If the context doesn't contain the answer, say so directly - don't
+speculate or fill in with outside knowledge.
 
-        ## Simple Explanation
-
-        Explain like you're teaching a university student who is new to the topic.
-
-        ## Takeaway
-
-        One sentence summarizing the idea.
-        """
+Only mention a "simpler explanation" if the material is genuinely
+technical or the user asked for one - don't add it by default."""
 
         messages = [
             {
@@ -70,7 +130,7 @@ class LLMService:
         )
         completion = self.client.chat.completions.create(
 
-            model="llama-3.1-8b-instant",
+            model=QUALITY_MODEL,
 
             messages=messages,
 
@@ -78,6 +138,66 @@ class LLMService:
 
         )
         return completion.choices[0].message.content
+
+    def explain_section(
+            self,
+            question: str,
+            section_name: str,
+            section_text: str
+    ):
+
+        prompt = f"""
+        You are ResearchPilot.
+
+        The user asked:
+
+        {question}
+
+        The following text is the "{section_name}" section of a research paper.
+
+        Rules:
+
+        1. Answer ONLY using this section - no outside knowledge.
+        2. Always explain and synthesize in your own words - never paste
+           large blocks of the source text verbatim, even for "what is..."
+           or "show me..." questions. A real explanation of the content is
+           more useful than a copy of it.
+        3. Skip anything irrelevant to the question - author names,
+           affiliations, emails, and other front-matter noise that happens
+           to be adjacent to the requested section should not appear in
+           your answer unless the question is specifically about authors.
+        4. "Summarize..." -> give a concise summary, not a full explanation.
+        5. Do NOT generate takeaways or extra sections unless explicitly asked.
+        6. Do NOT mention information from other sections.
+        7. If the question asks about something like authors across multiple
+           papers, clearly distinguish which paper each fact belongs to
+           using the paper names given in the section headers below.
+
+        Section(s):
+
+        {section_text[:8000]}
+        """
+
+        response = self.client.chat.completions.create(
+
+            model=QUALITY_MODEL,
+
+            messages=[
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+
+            temperature=0
+
+        )
+
+        return response.choices[0].message.content
 
     def generate_suggestions(
             self,
@@ -106,7 +226,7 @@ class LLMService:
     """
         completion = self.client.chat.completions.create(
 
-            model="llama-3.1-8b-instant",
+            model=FAST_MODEL,
 
             messages=[
                 {
@@ -130,48 +250,132 @@ class LLMService:
 
         return suggestions[:4]
 
-    def literature_review(self, search_results):
+    def literature_review(self, papers):
 
-        context = "\n\n".join(
-            result.content
-            for result in search_results
-        )
+        context = self.build_papers_context(papers)
 
         prompt = f"""
-        You are ResearchPilot, an expert AI research assistant.
+        You are ResearchPilot.
 
-        Use ONLY the provided context.
+        You are writing a scholarly literature review based ONLY on the selected papers.
 
-        Context:
+        ====================================================
+        SELECTED PAPERS
+        ====================================================
+
         {context}
 
-        ------------------------
+        ====================================================
 
+        Rules
 
-        Respond in this format:
+        - Use ONLY the selected papers.
+        - Never use outside knowledge.
+        - Never invent authors, papers, datasets or methods.
+        - Do NOT summarize papers one by one.
+        - Instead, synthesize the literature across papers.
+        - If only one paper discusses a topic, state that explicitly.
+        - Every factual statement must end with:
+        (Source: Paper → Section)
 
-        ## 📖 Answer
-        Give a clear and accurate answer.
+        ====================================================
 
-        ## 🔑 Key Points
-        - Point 1
-        - Point 2
-        - Point 3
+        # Introduction
 
-        ## 💡 Simple Explanation
-        Explain as if teaching a beginner.
+        Briefly describe the common research domain and why it is important.
 
-        ## ✅ Takeaway
-        Summarize the idea in one sentence.
+        ----------------------------------------------------
 
-        If the answer is not supported by the context, say:
-        "I couldn't find enough evidence in the selected papers."
+        # Research Themes
+
+        Identify the major themes emerging across the selected papers.
+
+        For EACH theme:
+
+        • Theme name
+
+        • Which papers belong
+
+        • Main idea
+
+        • Similarities
+
+        • Differences
+
+        Do NOT create themes unsupported by the papers.
+
+        ----------------------------------------------------
+
+        # Methodological Trends
+
+        Compare methodologies across papers.
+
+        Discuss
+
+        • frameworks
+
+        • architectures
+
+        • retrieval methods
+
+        • training strategies
+
+        • evaluation strategies
+
+        Focus on comparison rather than description.
+
+        ----------------------------------------------------
+
+        # Comparative Analysis
+
+        Discuss
+
+        • where papers agree
+
+        • where papers differ
+
+        • strengths of different approaches
+
+        • weaknesses of different approaches
+
+        ----------------------------------------------------
+
+        # Current State of Research
+
+        Explain what has already been achieved collectively.
+
+        Avoid repeating individual paper summaries.
+
+        ----------------------------------------------------
+
+        # Remaining Challenges
+
+        Only include challenges explicitly discussed or clearly implied by comparing multiple papers.
+
+        Do NOT invent challenges.
+
+        ----------------------------------------------------
+
+        # Future Research Directions
+
+        Merge future work suggested across papers.
+
+        Remove duplicate ideas.
+
+        Explain which directions appear most promising.
+
+        ----------------------------------------------------
+
+        # Conclusion
+
+        Write one analytical paragraph summarizing the overall progress of this research area.
+
+        Do NOT simply list papers.
+        Do NOT repeat previous sections.
         """
 
         completion = self.client.chat.completions.create(
-
-            model="llama-3.1-8b-instant",
-
+            model=QUALITY_MODEL,
             messages=[
                 {
                     "role": "system",
@@ -182,193 +386,344 @@ class LLMService:
                     "content": prompt
                 }
             ],
-
             temperature=0.2
-
         )
 
         return completion.choices[0].message.content
 
-    def compare_papers(self, search_results):
-        context = "\n\n".join(
-            result.content
-            for result in search_results
-        )
+    def build_papers_context(self, papers):
 
-        prompt = f"""
-        You are an expert research analyst.
-
-        Compare ONLY the selected research papers using the context below.
-
-        Context:
-        {context}
-
-        Rules:
-        - Use ONLY the provided context.
-        - If information is missing, write "Not specified."
-        - Use Markdown.
-        - Keep the comparison factual.
-
-        Your response MUST follow exactly this format:
-
-        # 📖 Overview
-
-        Briefly describe what all selected papers are about.
-
-        # 📊 Comparison Table
-
-        | Aspect | Paper 1 | Paper 2 |
-        |--------|---------|---------|
-        | Research Goal | | |
-        | Methodology | | |
-        | Main Contribution | | |
-        | Strengths | | |
-        | Weaknesses | | |
-        | Best Use Case | | |
-
-        (If more than two papers are selected, add more columns.)
-
-        # 🤝 Similarities
-
-        - ...
-
-        # ⚖️ Differences
-
-        - ...
-
-        # 🚧 Research Gaps
-
-        - ...
-
-        # 🚀 Future Research Directions
-
-        - ...
-
-        # ✅ Conclusion
-
-        Recommend when each paper should be preferred.
-        """
-
-        completion = self.client.chat.completions.create(
-
-            model="llama-3.1-8b-instant",
-
-            messages=[
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-
-            temperature=0.2
-
-        )
-
-        return completion.choices[0].message.content
-
-    def rewrite_query(
-            self,
-            question: str,
-            history: list = []
-    ):
-
-        conversation = ""
-
-        for msg in history[-6:]:
-            role = msg.role if hasattr(msg, "role") else msg["role"]
-            content = msg.content if hasattr(msg, "content") else msg["content"]
-
-            conversation += f"{role}: {content}\n"
-
-        question_lower = question.lower()
-
-        pronouns = [
-            "it",  "its",  "they",  "them", "their","this", "that",  "these", "those",  "he",  "she"
+        IMPORTANT_SECTIONS = [
+            "abstract",
+            "introduction",
+            "method",
+            "methods",
+            "methodology",
+            "experiment",
+            "experiments",
+            "results",
+            "limitations",
+            "future_work",
+            "future work",
+            "conclusion",
         ]
 
-        # If the question already looks complete, don't rewrite it.
-        if not any(f" {p} " in f" {question_lower} " for p in pronouns):
-            return question
+        SECTION_LIMIT = 700
+
+        context = ""
+
+        for index, paper in enumerate(papers, start=1):
+
+            metadata = paper.get("metadata", {})
+
+            paper_name = (
+                    metadata.get("paper_name")
+                    or metadata.get("title")
+                    or f"Paper {index}"
+            )
+
+            sections = paper.get("sections", {})
+
+            context += (
+                f"\n\n"
+                f"==================================================\n"
+                f"PAPER {index}: {paper_name}\n"
+                f"==================================================\n"
+            )
+
+            for heading, text in sections.items():
+
+                heading_lower = heading.lower()
+
+                if any(s in heading_lower for s in IMPORTANT_SECTIONS):
+                    context += (
+                        f"\n## {heading}\n"
+                        f"{text[:SECTION_LIMIT]}\n"
+                    )
+
+        print("=" * 80)
+        print("Context Length:", len(context))
+        print("=" * 80)
+
+        return context
+
+    def compare_papers(self, papers):
+
+        context = self.build_papers_context(papers)
 
         prompt = f"""
-    Conversation:
+    You are ResearchPilot.
 
-    {conversation}
+    Compare ONLY the papers provided below.
 
-    Current Question:
+    Use ONLY the supplied context.
 
-    {question}
+    Do NOT use outside knowledge.
 
-    Rewrite the current question so it is completely self-contained.
+    If information is missing, explicitly write:
+    "Not discussed in this paper."
 
-    Rules:
-    - Replace words like "it", "they", "that paper", "this method".
-    - Keep the same meaning.
-    - Return ONLY the rewritten question.
-    - Do not answer the question.
-    """
+    ==========================
+    PAPERS
+    ==========================
 
-        completion = self.client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=0
-        )
-
-        return completion.choices[0].message.content.strip()
-
-    def research_gaps(self, search_results):
-
-        context = "\n\n".join(
-            result.content[:800]
-            for result in search_results
-        )
-
-        prompt = f"""
-    You are an expert research analyst.
-
-    Use ONLY the context below.
-
-    Context:
     {context}
 
-    Write a report in Markdown.
+    ==========================
 
-    # 🔍 Research Gaps
+    Generate:
 
-    Identify important limitations in the selected papers.
+    # Quick Comparison Table
 
-    # 💡 Potential Research Ideas
+    One markdown table.
 
-    Suggest 4 novel research ideas.
+    Columns = paper names.
 
-    # 🚀 Future Work
+    Rows:
 
-    Suggest future research directions.
+    - Research Problem
+    - Core Idea
+    - Methodology
+    - Architecture
+    - Datasets
+    - Results
+    - Strengths
+    - Limitations
 
-    Do not invent information.
-    If evidence is missing, say so.
+    # Executive Summary
+
+    # Key Differences
+
+    # Strengths & Weaknesses
+
+    # Research Contributions
+
+    # Final Verdict
+
+    For every claim add
+
+    (Source: Paper → Section)
+
+    Do NOT generate Research Gaps.
+    Do NOT generate Literature Review.
     """
 
         completion = self.client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=QUALITY_MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
-            temperature=0.2
+            temperature=0.2,
+        )
+
+        return completion.choices[0].message.content
+
+    def research_gaps(self, papers):
+
+        context = self.build_papers_context(papers)
+
+        prompt = f"""
+        You are ResearchPilot.
+
+        You are performing a CRITICAL CROSS-PAPER RESEARCH GAP ANALYSIS.
+
+        Analyze ONLY the selected uploaded papers below.
+
+        =================================================
+        SELECTED PAPERS
+        =================================================
+
+        {context}
+
+        =================================================
+
+        RULES
+
+        - Use ONLY the selected uploaded papers.
+        - Never use outside knowledge.
+        - Never mention papers that appear only in references/citations.
+        - Never invent methods, datasets, limitations or future work.
+        - If something is not discussed, explicitly state:
+          "Not discussed in the selected papers."
+        - Never repeat the same fact in multiple sections.
+        - Every section must contribute NEW information.
+        - Use the uploaded paper names exactly as provided.
+        - Every factual statement must end with:
+          (Source: <Paper Name> → <Section>)
+
+        =================================================
+
+        # 1. Paper-wise Critical Review
+
+        For EACH selected paper provide ONLY:
+
+        Paper Name
+
+        Objective
+
+        Core Method
+
+        Key Contributions
+
+        Strengths
+
+        Author-identified Limitations
+
+        Author-proposed Future Work
+
+        Discuss ONLY that paper.
+        Do NOT compare papers here.
+
+        -------------------------------------------------
+
+        # 2. Cross-Paper Analysis
+
+        Compare the selected papers.
+
+        Discuss ONLY:
+
+        • Common research problem
+
+        • Major methodological differences
+
+        • Similarities
+
+        • Differences
+
+        • Strength comparison
+
+        • Weakness comparison
+
+        Do NOT summarize papers again.
+        Do NOT repeat facts from Section 1.
+
+        -------------------------------------------------
+
+        # 3. Research Gaps
+
+        Infer research gaps ONLY AFTER comparing ALL papers.
+
+        A research gap must represent something that remains unsolved across the selected papers.
+
+        For EACH gap provide:
+
+        Gap
+
+        Why it remains unsolved
+
+        Which papers partially address it
+
+        Why existing approaches are insufficient
+
+        Potential research direction
+
+        Support every gap using the selected papers.
+
+        If no common gap exists, write:
+
+        "No common research gap could be inferred."
+
+        -------------------------------------------------
+
+        # 4. Missing Evaluations
+
+        Identify evaluation aspects missing from the selected papers such as:
+
+        • datasets
+
+        • benchmarks
+
+        • scalability
+
+        • efficiency
+
+        • latency
+
+        • robustness
+
+        • real-world deployment
+
+        • ablation studies
+
+        Only include evaluation gaps supported by the selected papers.
+
+        Do NOT repeat methodological limitations.
+
+        -------------------------------------------------
+
+        # 5. Contradictions
+
+        Identify genuine disagreements between papers.
+
+        Examples:
+
+        • conflicting assumptions
+
+        • conflicting conclusions
+
+        • different architectural choices
+
+        • different evaluation methodology
+
+        If none exist, explicitly state:
+
+        "No significant contradictions were identified."
+
+        -------------------------------------------------
+
+        # 6. Future Research Directions
+
+        Merge future work proposed by different papers.
+
+        Remove duplicate ideas.
+
+        Highlight the most promising future direction and explain WHY.
+
+        -------------------------------------------------
+
+        # 7. Thesis Opportunities
+
+        Generate THREE concrete thesis ideas.
+
+        Each idea MUST combine concepts from at least TWO selected papers.
+
+        For each idea provide:
+
+        Title
+
+        Motivation
+
+        Combined Papers
+
+        Expected Contribution
+
+        Implementation Challenge
+
+        Avoid generic AI project ideas.
+
+        -------------------------------------------------
+
+        # Final Takeaway
+
+        Write ONE concise analytical paragraph describing:
+
+        • what these papers collectively achieve,
+
+        • what still remains unsolved,
+
+        • where future research should focus.
+
+        Do NOT repeat previous sections.
+        Do NOT summarize every paper again.
+        """
+        completion = self.client.chat.completions.create(
+            model=QUALITY_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,
         )
 
         return completion.choices[0].message.content

@@ -25,13 +25,12 @@ class StorageService:
 
         from datetime import datetime
 
-        # Save paper metadata
         metadata = {
             "paper_id": paper_id,
             "paper_name": file.filename,
             "uploaded_at": datetime.now().isoformat(),
-
         }
+
         with (paper_folder / "metadata.json").open(
             "w",
             encoding="utf-8"
@@ -52,3 +51,50 @@ class StorageService:
             file.write(markdown)
 
         return markdown_path
+
+    def save_parsed_document(self, paper_folder: Path, parsed_document):
+        parsed_path = paper_folder / "parsed.json"
+
+        metadata_path = paper_folder / "metadata.json"
+
+        metadata = {}
+
+        if metadata_path.exists():
+            with metadata_path.open("r", encoding="utf-8") as f:
+                metadata = json.load(f)
+
+        data = {
+            "metadata": {
+                "paper_id": parsed_document.paper_id,
+                "paper_name": parsed_document.paper_name,
+                "uploaded_at": parsed_document.uploaded_at,
+            },
+            "markdown": parsed_document.markdown,
+            "sections": parsed_document.sections,
+        }
+
+        with parsed_path.open("w", encoding="utf-8") as file:
+            json.dump(
+                data,
+                file,
+                indent=4,
+                ensure_ascii=False
+            )
+
+        return parsed_path
+
+    def save_summary(self, paper_folder: Path, summary: dict):
+        summary_path = paper_folder / "summary.json"
+
+        with summary_path.open(
+                "w",
+                encoding="utf-8"
+        ) as file:
+            json.dump(
+                summary,
+                file,
+                indent=4,
+                ensure_ascii=False
+            )
+
+        return summary_path

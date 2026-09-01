@@ -37,6 +37,11 @@ class IndexingService:
             parsed_document.markdown
         )
 
+        parsed_path = self.storage.save_parsed_document(
+            storage_result["paper_folder"],
+            parsed_document
+        )
+
         chunks = self.chunker.chunk_markdown(
             parsed_document.markdown
         )
@@ -56,5 +61,6 @@ class IndexingService:
         return {
             "paper_id": storage_result["paper_id"],
             "chunks": len(chunks),
-            "markdown_path": str(markdown_path)
+            "markdown_path": str(markdown_path),
+            "parsed_path": str(parsed_path)
         }
